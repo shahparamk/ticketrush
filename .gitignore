@@ -1,0 +1,22 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+.terraform.tfstate.lock.info
+
+# Node / build output
+node_modules/
+dist/
+*.zip
+
+# Editors and OS
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+*.pem
