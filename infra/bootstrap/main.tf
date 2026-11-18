@@ -8,18 +8,18 @@ terraform {
   }
   # Starts with local state. After the first apply, we move it into the bucket it creates.
     # State lives in the bucket this config created (migrated after the first apply)
+   # The bucket name comes from backend.hcl (not committed): terraform init -backend-config=backend.hcl
   backend "s3" {
-    bucket       = "ticketrush-tfstate-717279721195"
     key          = "bootstrap/terraform.tfstate"
     region       = "us-east-1"
     encrypt      = true
-    use_lockfile = true # S3-native locking: no DynamoDB lock table needed
+    use_lockfile = true
   }
-}
 
+}
 provider "aws" {
   region              = "us-east-1"
-  allowed_account_ids = ["717279721195"] # guardrail: refuse to run against any other account
+    allowed_account_ids = [var.account_id] # guardrail: refuse to run against any other account
   default_tags {
     tags = {
       Project   = "ticketrush"
@@ -117,4 +117,9 @@ resource "aws_s3_bucket_policy" "tfstate" {
 
 output "state_bucket" {
   value = aws_s3_bucket.tfstate.bucket
+}
+
+variable "account_id" {
+  description = "The only AWS account this config may touch (set in terraform.tfvars, not committed)"
+  type        = string
 }
