@@ -1,0 +1,107 @@
+name: terraform-pr
+
+# Runs on EVERY pull request, so the required checks always report
+# (a check that skips itself would block non-infra PRs forever).
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write       # lets the job request a GitHub OIDC token for AWS
+  pull-requests: write  # lets the job post the plan as a PR comment
+
+concurrency:
+  group: terraform-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  TF_IN_AUTOMATION: "true"
+  AWS_REGION: us-east-1
+
+jobs:
+  validate:
+    name: fmt / validate / tflint / checkov
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.11"
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive infra
+
+      - name: terraform validate (no backend)
+        run: |
+          for dir in infra/bootstrap infra/global/github-oidc infra/envs/dev; do
+            echo "::group::$dir"
+            terraform -chdir=$dir init -backend=false -input=false
+            terraform -chdir=$dir validate
+            echo "::endgroup::"
+          done
+
+      - uses: terraform-linters/setup-tflint@v4
+
+      - name: tflint
+        run: |
+          tflint --init
+          for dir in infra/bootstrap infra/global/github-oidc infra/envs/dev; do
+            tflint --chdir=$dir
+          done
+
+      - name: Checkov (enforced)
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infra
+          framework: terraform
+          quiet: true
+          soft_fail: false
+
+  plan:
+    name: plan (dev)
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.11"
+
+      - name: AWS credentials (read-only OIDC role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Local config from secrets
+        working-directory: infra/envs/dev
+        run: |
+          echo 'bucket = "${{ secrets.TF_STATE_BUCKET }}"' > backend.hcl
+          echo 'account_id = "${{ secrets.AWS_ACCOUNT_ID }}"' > terraform.tfvars
+
+      - name: terraform init
+        working-directory: infra/envs/dev
+        run: terraform init -input=false -backend-config=backend.hcl
+
+      - name: terraform plan
+        id: plan
+        working-directory: infra/envs/dev
+        run: |
+          set -o pipefail
+          terraform plan -input=false -no-color -lock-timeout=60s | tee plan.txt
+
+      - name: Post the plan as a PR comment
+        if: always() && steps.plan.outcome != 'skipped'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'infra/envs/dev/plan.txt';
+            let plan = fs.existsSync(path) ? fs.readFileSync(path, 'utf8') : 'Plan did not run.';
+            const summary = (plan.match(/Plan: .*|No changes\..*/) || ['(see logs)'])[0];
+            if (plan.length > 60000) plan = plan.slice(-60000);
+            const body = `### Terraform plan (dev): ${summary}\n<details><summary>Full plan</summary>\n\n\`\`\`\n${plan}\n\`\`\`\n</details>`;
+            await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body });
