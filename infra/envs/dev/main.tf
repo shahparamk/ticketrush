@@ -6,13 +6,18 @@ terraform {
       version = "~> 6.70"
     }
   }
+  # The bucket name comes from backend.hcl (not committed): terraform init -backend-config=backend.hcl
   backend "s3" {
-    bucket       = "ticketrush-tfstate-717279721195"
     key          = "envs/dev/terraform.tfstate"
     region       = "us-east-1"
     encrypt      = true
     use_lockfile = true
   }
+}
+
+variable "account_id" {
+  description = "The only AWS account this config may touch (set in terraform.tfvars, not committed)"
+  type        = string
 }
 
 locals {
@@ -29,7 +34,7 @@ locals {
 # Primary region: serves all writes (active-passive design)
 provider "aws" {
   region              = "us-east-1"
-  allowed_account_ids = ["717279721195"]
+  allowed_account_ids = [var.account_id] # guardrail: refuse to run against any other account
   default_tags {
     tags = local.tags
   }
@@ -39,7 +44,7 @@ provider "aws" {
 provider "aws" {
   alias               = "secondary"
   region              = "us-west-2"
-  allowed_account_ids = ["717279721195"]
+  allowed_account_ids = [var.account_id]
   default_tags {
     tags = local.tags
   }

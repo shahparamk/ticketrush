@@ -1,3 +1,8 @@
+# Local-only settings (account ID, state bucket); examples are committed instead
+backend.hcl
+*.tfvars
+!*.tfvars.example
+
 # Terraform
 .terraform/
 *.tfstate
@@ -14,6 +19,7 @@ dist/
 
 # Editors and OS
 .vscode/
+
 .DS_Store
 Thumbs.db
 
