@@ -13,7 +13,7 @@ data "aws_iam_policy_document" "ec2_trust" {
 
 resource "aws_iam_role" "jenkins" {
   name               = local.name
-  description        = "Jenkins on EC2: SSM access now; deploy permissions added in Session 2"
+  description        = "Jenkins on EC2: SSM access and its own config parameters; deploy permissions added in Session 2b"
   assume_role_policy = data.aws_iam_policy_document.ec2_trust.json
 }
 
@@ -21,6 +21,21 @@ resource "aws_iam_role" "jenkins" {
 resource "aws_iam_role_policy_attachment" "ssm" {
   role       = aws_iam_role.jenkins.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+# Read ONLY Jenkins's own parameters (e.g. the admin password) at boot
+data "aws_iam_policy_document" "jenkins_params" {
+  statement {
+    sid       = "ReadJenkinsParameters"
+    actions   = ["ssm:GetParameter"]
+    resources = ["arn:aws:ssm:us-east-1:${var.account_id}:parameter/ticketrush/jenkins/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "jenkins_params" {
+  name   = "read-jenkins-parameters"
+  role   = aws_iam_role.jenkins.id
+  policy = data.aws_iam_policy_document.jenkins_params.json
 }
 
 resource "aws_iam_instance_profile" "jenkins" {

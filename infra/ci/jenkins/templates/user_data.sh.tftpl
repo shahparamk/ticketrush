@@ -1,16 +1,72 @@
 #!/bin/bash
-# Runs once at first boot: install Docker, then run Jenkins in a container.
+# Runs at first boot: swap, data disk, then a Jenkins image built from pinned base + plugins + JCasC.
+# Note: this is a Terraform template. Shell variables are written WITHOUT braces ($VAR, not the
+# brace form), because Terraform would treat the brace form as its own interpolation.
 set -euxo pipefail
 
 dnf install -y docker
 systemctl enable --now docker
 
-# Jenkins data lives on the host disk, so it survives container restarts
+# --- 1. Swap: a 2 GB safety net so a memory spike doesn't kill Jenkins ---
+if [ ! -f /swapfile ]; then
+  fallocate -l 2G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+fi
+swapon /swapfile || true
+grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+
+# --- 2. Data disk: wait for the attached EBS volume, format it only if it's new, mount it ---
+ROOT_DISK=$(lsblk -no PKNAME "$(findmnt -no SOURCE /)")
+DATA_DEV=""
+for i in $(seq 1 60); do
+  DATA_DEV=$(lsblk -dpno NAME,TYPE | awk '$2=="disk" {print $1}' | grep -vx "/dev/$ROOT_DISK" | head -n1 || true)
+  if [ -n "$DATA_DEV" ]; then break; fi
+  sleep 5
+done
+if [ -z "$DATA_DEV" ]; then echo "Data volume never appeared" >&2; exit 1; fi
+
+blkid "$DATA_DEV" || mkfs -t xfs "$DATA_DEV" # never reformat an existing disk
 mkdir -p /opt/jenkins_home
+DATA_UUID=$(blkid -s UUID -o value "$DATA_DEV")
+grep -q "$DATA_UUID" /etc/fstab || echo "UUID=$DATA_UUID /opt/jenkins_home xfs defaults,nofail 0 2" >> /etc/fstab
+mount -a
 chown 1000:1000 /opt/jenkins_home
 
-# Bind to 127.0.0.1 only: reachable through the SSM tunnel, never from the network
-docker run -d --name jenkins --restart unless-stopped \
+# --- 3. Build the Jenkins image: pinned base + plugins + JCasC (both from Git) ---
+mkdir -p /opt/jenkins-image
+cat > /opt/jenkins-image/plugins.txt <<'PLUGINS'
+${plugins}
+PLUGINS
+
+cat > /opt/jenkins-image/casc.yaml <<'CASC'
+${casc}
+CASC
+
+cat > /opt/jenkins-image/Dockerfile <<'DOCKERFILE'
+FROM ${jenkins_image}
+COPY plugins.txt /usr/share/jenkins/ref/plugins.txt
+RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/plugins.txt
+COPY casc.yaml /usr/share/jenkins/ref/casc.yaml
+ENV CASC_JENKINS_CONFIG=/usr/share/jenkins/ref/casc.yaml
+ENV JAVA_OPTS=-Djenkins.install.runSetupWizard=false
+DOCKERFILE
+
+docker build -t ticketrush-jenkins:local /opt/jenkins-image
+
+# --- 4. The admin password: from SSM Parameter Store, never in Git or Terraform state ---
+ADMIN_PW=$(aws ssm get-parameter --region us-east-1 --name /ticketrush/jenkins/admin-password --with-decryption --query Parameter.Value --output text)
+
+# --- 5. Run Jenkins ---
+# A named network so Docker agents (Session 2b) can reach the controller as "jenkins".
+# The Docker socket lets Jenkins start agent containers (root-equivalent; see README trade-offs).
+docker network create jenkins || true
+DOCKER_GID=$(getent group docker | cut -d: -f3)
+docker rm -f jenkins || true
+docker run -d --name jenkins --restart unless-stopped --network jenkins \
   -p 127.0.0.1:8080:8080 \
   -v /opt/jenkins_home:/var/jenkins_home \
-  ${jenkins_image}
+  -v /var/run/docker.sock:/var/run/docker.sock --group-add "$DOCKER_GID" \
+  -e JENKINS_ADMIN_PASSWORD="$ADMIN_PW" \
+  -e PLUGINS_FORCE_UPGRADE=true \
+  ticketrush-jenkins:local
