@@ -1,0 +1,16 @@
+#!/bin/bash
+# Runs once at first boot: install Docker, then run Jenkins in a container.
+set -euxo pipefail
+
+dnf install -y docker
+systemctl enable --now docker
+
+# Jenkins data lives on the host disk, so it survives container restarts
+mkdir -p /opt/jenkins_home
+chown 1000:1000 /opt/jenkins_home
+
+# Bind to 127.0.0.1 only: reachable through the SSM tunnel, never from the network
+docker run -d --name jenkins --restart unless-stopped \
+  -p 127.0.0.1:8080:8080 \
+  -v /opt/jenkins_home:/var/jenkins_home \
+  ${jenkins_image}

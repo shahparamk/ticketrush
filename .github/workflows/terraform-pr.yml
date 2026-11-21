@@ -18,6 +18,8 @@ concurrency:
 env:
   TF_IN_AUTOMATION: "true"
   AWS_REGION: us-east-1
+  # Every Terraform config in the repo; validate + tflint run on all of them
+  TF_DIRS: "infra/bootstrap infra/global/github-oidc infra/ci/jenkins infra/envs/dev"
 
 jobs:
   validate:
@@ -35,7 +37,7 @@ jobs:
 
       - name: terraform validate (no backend)
         run: |
-          for dir in infra/bootstrap infra/global/github-oidc infra/envs/dev; do
+          for dir in $TF_DIRS; do
             echo "::group::$dir"
             terraform -chdir=$dir init -backend=false -input=false
             terraform -chdir=$dir validate
@@ -47,7 +49,7 @@ jobs:
       - name: tflint
         run: |
           tflint --init
-          for dir in infra/bootstrap infra/global/github-oidc infra/envs/dev; do
+          for dir in $TF_DIRS; do
             tflint --chdir=$dir
           done
 
