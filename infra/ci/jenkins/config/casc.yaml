@@ -1,0 +1,20 @@
+# Jenkins Configuration as Code (JCasC). Applied on every start, so changes made
+# in the UI are overwritten. Edit this file, open a PR, and the server is rebuilt.
+jenkins:
+  systemMessage: "TicketRush CI: configured as code (JCasC). UI changes are overwritten on restart."
+  # Nothing runs on the controller itself; builds run on Docker agents (Session 2b)
+  numExecutors: 0
+  mode: EXCLUSIVE
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "admin"
+          password: "${JENKINS_ADMIN_PASSWORD}" # injected at boot from SSM Parameter Store
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+
+unclassified:
+  location:
+    url: "http://localhost:8080/"

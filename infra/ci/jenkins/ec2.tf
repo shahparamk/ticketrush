@@ -28,8 +28,11 @@ resource "aws_instance" "jenkins" {
     delete_on_termination = true
   }
 
+  # Plugins and JCasC come from Git; changing either rebuilds the server (data is on its own volume)
   user_data = templatefile("${path.module}/templates/user_data.sh.tftpl", {
     jenkins_image = var.jenkins_image
+    plugins       = file("${path.module}/config/plugins.txt")
+    casc          = file("${path.module}/config/casc.yaml")
   })
   user_data_replace_on_change = true
 
@@ -38,7 +41,10 @@ resource "aws_instance" "jenkins" {
   }
 
   lifecycle {
-    ignore_changes = [ami] # don't rebuild Jenkins every time Amazon publishes a new AMI
+    ignore_changes = [
+      ami,                         # don't rebuild Jenkins every time Amazon publishes a new AMI
+      associate_public_ip_address, # a STOPPED instance reports false (its public IP is released); without this, every plan while stopped would force a rebuild
+    ]
   }
 }
 
