@@ -16,8 +16,21 @@ param(
 $ErrorActionPreference = "Stop"
 $env:AWS_PAGER = ""
 $region = "us-east-1"
-$repoRoot = (git rev-parse --show-toplevel).Trim()
-$id = (terraform "-chdir=$repoRoot/infra/ci/jenkins" output -raw instance_id).Trim()
+
+# Use the shipyard SSO profile, and fail clearly if the login has expired
+if (-not $env:AWS_PROFILE) { $env:AWS_PROFILE = "shipyard" }
+aws sts get-caller-identity --output text | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "AWS login failed for profile '$env:AWS_PROFILE'. Run: aws sso login --profile shipyard"
+}
+
+# Find the instance by its Name tag (no Terraform state needed)
+$id = aws ec2 describe-instances --region $region `
+    --filters "Name=tag:Name,Values=ticketrush-jenkins" "Name=instance-state-name,Values=pending,running,stopping,stopped" `
+    --query "Reservations[0].Instances[0].InstanceId" --output text
+if (-not $id -or $id -eq "None") {
+    throw "No ticketrush-jenkins instance found in $region."
+}
 
 switch ($Action) {
     "start" {
@@ -34,6 +47,9 @@ switch ($Action) {
         aws ec2 describe-instances --instance-ids $id --region $region --query "Reservations[0].Instances[0].State.Name" --output text
     }
     "connect" {
+        if (-not (Get-Command session-manager-plugin -ErrorAction SilentlyContinue)) {
+            $env:Path += ";C:\Program Files\Amazon\SessionManagerPlugin\bin"
+        }
         Write-Host "Open http://localhost:8080 in your browser. Press Ctrl+C here to close the tunnel." -ForegroundColor Cyan
         aws ssm start-session --target $id --region $region --document-name AWS-StartPortForwardingSession --parameters "portNumber=8080,localPortNumber=8080"
     }
