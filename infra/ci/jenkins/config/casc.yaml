@@ -41,3 +41,33 @@ jenkins:
 unclassified:
   location:
     url: "http://localhost:8080/"
+
+# Jobs as code (Job DSL): the TicketRush multibranch pipeline
+jobs:
+  - script: |
+      multibranchPipelineJob('ticketrush') {
+        displayName('TicketRush')
+        description('Every branch: terraform plan. main: plan, manual approval, apply. Defined in casc.yaml (Job DSL).')
+        branchSources {
+          git {
+            id('ticketrush-git')
+            remote('https://github.com/shahparamk/ticketrush.git') // public repo: no credentials needed
+          }
+        }
+        factory {
+          workflowBranchProjectFactory {
+            scriptPath('Jenkinsfile')
+          }
+        }
+        triggers {
+          // Poll for new commits every 5 minutes: Jenkins accepts no inbound traffic, so no webhooks
+          periodicFolderTrigger {
+            interval('5m')
+          }
+        }
+        orphanedItemStrategy {
+          discardOldItems {
+            numToKeep(5)
+          }
+        }
+      }
