@@ -14,7 +14,7 @@ resource "aws_instance" "jenkins" {
   ebs_optimized               = true
   monitoring                  = true
 
-  # IMDSv2 only. Hop limit 2 lets the Jenkins *container* reach instance credentials.
+  # IMDSv2 only. Hop limit 2 lets containers (Jenkins and its agents) reach instance credentials.
   metadata_options {
     http_endpoint               = "enabled"
     http_tokens                 = "required"
@@ -28,11 +28,16 @@ resource "aws_instance" "jenkins" {
     delete_on_termination = true
   }
 
-  # Plugins and JCasC come from Git; changing either rebuilds the server (data is on its own volume)
+  # Plugins, JCasC and the agent Dockerfile come from Git; changing any of them rebuilds the server
+  # (Jenkins data is on its own volume, so it survives)
   user_data = templatefile("${path.module}/templates/user_data.sh.tftpl", {
-    jenkins_image = var.jenkins_image
-    plugins       = file("${path.module}/config/plugins.txt")
-    casc          = file("${path.module}/config/casc.yaml")
+    jenkins_image     = var.jenkins_image
+    plugins           = file("${path.module}/config/plugins.txt")
+    casc              = file("${path.module}/config/casc.yaml")
+    agent_dockerfile  = file("${path.module}/config/agent.Dockerfile")
+    agent_base_image  = var.agent_base_image
+    terraform_version = var.terraform_version
+    awscli_version    = var.awscli_version
   })
   user_data_replace_on_change = true
 

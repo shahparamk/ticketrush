@@ -1,1 +1,5 @@
-account_id = "<ACCOUNT_ID>"
+account_id        = "<ACCOUNT_ID>"
+jenkins_image     = "jenkins/jenkins:<VERSION>-lts-jdk21"
+agent_base_image  = "jenkins/inbound-agent:<TAG>-jdk21@sha256:<DIGEST>"
+terraform_version = "<SAME AS LAPTOP AND CI>"
+awscli_version    = "<AWS CLI v2 VERSION>"

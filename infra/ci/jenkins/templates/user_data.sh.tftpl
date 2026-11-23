@@ -1,5 +1,6 @@
 #!/bin/bash
-# Runs at first boot: swap, data disk, then a Jenkins image built from pinned base + plugins + JCasC.
+# Runs at first boot: swap, data disk, a Jenkins image (pinned base + plugins + JCasC),
+# and the build-agent image (pinned base + pinned, verified tools).
 # Note: this is a Terraform template. Shell variables are written WITHOUT braces ($VAR, not the
 # brace form), because Terraform would treat the brace form as its own interpolation.
 set -euxo pipefail
@@ -54,11 +55,23 @@ DOCKERFILE
 
 docker build -t ticketrush-jenkins:local /opt/jenkins-image
 
-# --- 4. The admin password: from SSM Parameter Store, never in Git or Terraform state ---
+# --- 4. Build the agent image: one fresh container per build (Dockerfile from Git, pinned tools) ---
+mkdir -p /opt/agent-image
+cat > /opt/agent-image/Dockerfile <<'AGENT'
+${agent_dockerfile}
+AGENT
+
+docker build -t ticketrush-agent:local \
+  --build-arg BASE_IMAGE=${agent_base_image} \
+  --build-arg TERRAFORM_VERSION=${terraform_version} \
+  --build-arg AWSCLI_VERSION=${awscli_version} \
+  /opt/agent-image
+
+# --- 5. The admin password: from SSM Parameter Store, never in Git or Terraform state ---
 ADMIN_PW=$(aws ssm get-parameter --region us-east-1 --name /ticketrush/jenkins/admin-password --with-decryption --query Parameter.Value --output text)
 
-# --- 5. Run Jenkins ---
-# A named network so Docker agents (Session 2b) can reach the controller as "jenkins".
+# --- 6. Run Jenkins ---
+# A named network for Jenkins and its agents.
 # The Docker socket lets Jenkins start agent containers (root-equivalent; see README trade-offs).
 docker network create jenkins || true
 DOCKER_GID=$(getent group docker | cut -d: -f3)
