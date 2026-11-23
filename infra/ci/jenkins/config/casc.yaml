@@ -2,7 +2,7 @@
 # in the UI are overwritten. Edit this file, open a PR, and the server is rebuilt.
 jenkins:
   systemMessage: "TicketRush CI: configured as code (JCasC). UI changes are overwritten on restart."
-  # Nothing runs on the controller itself; builds run on Docker agents (Session 2b)
+  # Nothing runs on the controller itself; builds run on throwaway Docker agents (below)
   numExecutors: 0
   mode: EXCLUSIVE
   securityRealm:
@@ -14,6 +14,29 @@ jenkins:
   authorizationStrategy:
     loggedInUsersCanDoAnything:
       allowAnonymousRead: false
+
+  # Docker agents: one fresh container per build, removed afterwards
+  clouds:
+    - docker:
+        name: "docker"
+        dockerApi:
+          dockerHost:
+            uri: "unix:///var/run/docker.sock"
+        templates:
+          - name: "ticketrush-agent"
+            labelString: "docker-agent"
+            mode: EXCLUSIVE # only builds that ask for "docker-agent" use it
+            remoteFs: "/home/jenkins/agent"
+            instanceCapStr: "2" # at most 2 agents at once (t3.medium)
+            pullStrategy: PULL_NEVER # the image is built locally at boot
+            removeVolumes: true
+            dockerTemplateBase:
+              image: "ticketrush-agent:local"
+            # "attach": Jenkins talks to the agent through the Docker API,
+            # so the agent never needs to reach the controller over the network
+            connector:
+              attach:
+                user: "jenkins"
 
 unclassified:
   location:

@@ -25,6 +25,21 @@ variable "jenkins_image" {
   type        = string
 }
 
+variable "agent_base_image" {
+  description = "Jenkins inbound-agent base image, pinned by tag AND digest (tag@sha256:...)"
+  type        = string
+}
+
+variable "terraform_version" {
+  description = "Terraform version inside the build agent; keep it equal to the laptop and GitHub Actions"
+  type        = string
+}
+
+variable "awscli_version" {
+  description = "AWS CLI v2 version inside the build agent"
+  type        = string
+}
+
 variable "instance_type" {
   description = "Jenkins needs ~2 GB for itself plus room for Docker build agents"
   type        = string
