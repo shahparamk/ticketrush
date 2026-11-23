@@ -60,9 +60,10 @@ jobs:
           }
         }
         triggers {
-          // Poll for new commits every 5 minutes: Jenkins accepts no inbound traffic, so no webhooks
+          // Poll for new commits every 2 minutes: Jenkins accepts no inbound traffic, so no webhooks.
+          // Plain git polling has no GitHub API rate limit, so a short interval is fine.
           periodicFolderTrigger {
-            interval('5m')
+            interval('2m')
           }
         }
         orphanedItemStrategy {
