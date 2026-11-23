@@ -40,7 +40,10 @@ pipeline {
     }
 
     stage('Apply (dev)') {
-      when { branch 'main' }
+      when {
+        beforeAgent true // check the branch BEFORE starting an agent, so branches don't start one for nothing
+        branch 'main'
+      }
       agent { label 'docker-agent' }
       steps {
         unstash 'plan'
