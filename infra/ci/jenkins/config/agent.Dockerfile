@@ -1,3 +1,4 @@
+# check=skip=InvalidDefaultArgInFrom
 # Jenkins build agent: the pinned inbound-agent base plus pinned, verified tools.
 # Built on the Jenkins host at boot; Jenkins starts one fresh container per build.
 ARG BASE_IMAGE
@@ -29,6 +30,9 @@ RUN set -eux; cd /tmp; \
     ./aws/install; \
     rm -rf aws awscliv2.zip; \
     aws --version
+
+# Don't let Terraform phone home on every run ("out of date" notices)
+ENV CHECKPOINT_DISABLE=1
 
 # Builds run as the unprivileged jenkins user, never root
 USER jenkins
