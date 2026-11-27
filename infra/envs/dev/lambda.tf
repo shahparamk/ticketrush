@@ -6,9 +6,10 @@ locals {
 }
 
 # The bundle built by `npm run build` (dist/index.js), zipped for Lambda
+# The bundle built by `npm run build` (dist/index.mjs, an ES module), zipped for Lambda
 data "archive_file" "hello" {
   type        = "zip"
-  source_file = "${path.module}/../../../services/hello/dist/index.js"
+  source_file = "${path.module}/../../../services/hello/dist/index.mjs"
   output_path = "${path.module}/../../../services/hello/dist/hello.zip"
 }
 
