@@ -129,6 +129,7 @@ data "aws_iam_policy_document" "jenkins_deploy" {
     ]
   }
 
+
   # KMS: only keys tagged Project = ticketrush (the multi-Region data key and its replica)
   statement {
     sid       = "ManageTicketRushKeys"
@@ -144,6 +145,19 @@ data "aws_iam_policy_document" "jenkins_deploy" {
     sid       = "ManageTicketRushKeyAliases"
     actions   = ["kms:CreateAlias", "kms:UpdateAlias", "kms:DeleteAlias"]
     resources = ["arn:aws:kms:*:${var.account_id}:alias/ticketrush-*"]
+  }
+
+  # Creating a key has no existing resource to check a tag on, so require the tag ON THE REQUEST
+  # (covers CreateKey and ReplicateKey, which creates the replica key in the other region)
+  statement {
+    sid       = "CreateTaggedTicketRushKeys"
+    actions   = ["kms:CreateKey", "kms:TagResource"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Project"
+      values   = ["ticketrush"]
+    }
   }
 
   # Lambda: only ticketrush-dev-* functions

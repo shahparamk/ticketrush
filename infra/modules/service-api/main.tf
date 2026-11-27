@@ -1,4 +1,5 @@
-# One region's API for a service: an HTTP API plus any number of Lambda functions, each with its own routes.
+# One region's API for a service: an HTTP API plus any number of Lambda functions, each with its own routes,
+# and an optional Lambda authorizer for protected routes.
 # Used once per region by envs/dev, so both regions are always identical.
 terraform {
   required_version = ">= 1.11"
@@ -21,7 +22,7 @@ variable "kms_key_arn" {
 }
 
 variable "functions" {
-  description = "Functions keyed by short name (e.g. read); each lists the HTTP routes it serves"
+  description = "Functions keyed by short name (e.g. read); each lists the HTTP routes it serves (none for an authorizer)"
   type = map(object({
     zip_path             = string
     zip_hash             = string
@@ -32,6 +33,23 @@ variable "functions" {
     timeout              = number
     reserved_concurrency = number
   }))
+}
+
+variable "authorizer_function" {
+  description = "Key (in functions) of the Lambda authorizer, or null for no authorizer"
+  type        = string
+  default     = null
+}
+
+variable "protected_routes" {
+  description = "Routes that require a valid buyer token (checked by the authorizer)"
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.protected_routes) == 0 || var.authorizer_function != null
+    error_message = "protected_routes needs an authorizer_function."
+  }
 }
 
 variable "throttle_rate_limit" {
@@ -49,6 +67,9 @@ locals {
   routes = merge([
     for fn, cfg in var.functions : { for r in cfg.routes : r => fn }
   ]...)
+
+  # Only functions that serve routes get an integration (the authorizer has none)
+  routed_functions = { for k, v in var.functions : k => v if length(v.routes) > 0 }
 }
 
 resource "aws_cloudwatch_log_group" "fn" {
@@ -103,7 +124,7 @@ resource "aws_apigatewayv2_api" "this" {
 }
 
 resource "aws_apigatewayv2_integration" "fn" {
-  for_each               = var.functions
+  for_each               = local.routed_functions
   api_id                 = aws_apigatewayv2_api.this.id
   integration_type       = "AWS_PROXY"
   integration_method     = "POST"
@@ -111,12 +132,28 @@ resource "aws_apigatewayv2_integration" "fn" {
   payload_format_version = "2.0"
 }
 
+# Checks the buyer token before a protected route runs. Results are cached per token for 60 s,
+# so most requests don't even invoke the authorizer; no token at all -> 401 without invoking it.
+resource "aws_apigatewayv2_authorizer" "this" {
+  count                             = var.authorizer_function == null ? 0 : 1
+  api_id                            = aws_apigatewayv2_api.this.id
+  name                              = "${var.name}-authorizer"
+  authorizer_type                   = "REQUEST"
+  authorizer_uri                    = aws_lambda_function.fn[var.authorizer_function].invoke_arn
+  identity_sources                  = ["$request.header.Authorization"]
+  authorizer_payload_format_version = "2.0"
+  enable_simple_responses           = true
+  authorizer_result_ttl_in_seconds  = 60
+}
+
 resource "aws_apigatewayv2_route" "this" {
-  #checkov:skip=CKV_AWS_309:Read routes are public by design; buyer authentication (KMS-signed tokens) is added to write routes in step 2b
-  for_each  = local.routes
-  api_id    = aws_apigatewayv2_api.this.id
-  route_key = each.key
-  target    = "integrations/${aws_apigatewayv2_integration.fn[each.value].id}"
+  #checkov:skip=CKV_AWS_309:Read routes and POST /session are public by design; buyer routes use the Lambda authorizer (authorization_type CUSTOM)
+  for_each           = local.routes
+  api_id             = aws_apigatewayv2_api.this.id
+  route_key          = each.key
+  target             = "integrations/${aws_apigatewayv2_integration.fn[each.value].id}"
+  authorization_type = contains(var.protected_routes, each.key) ? "CUSTOM" : "NONE"
+  authorizer_id      = contains(var.protected_routes, each.key) ? aws_apigatewayv2_authorizer.this[0].id : null
 }
 
 resource "aws_apigatewayv2_stage" "default" {
@@ -138,11 +175,12 @@ resource "aws_apigatewayv2_stage" "default" {
       status    = "$context.status"
       latencyMs = "$context.responseLatency"
       error     = "$context.integrationErrorMessage"
+      authError = "$context.authorizer.error"
     })
   }
 }
 
-# Each function may be invoked only by THIS API
+# Each function may be invoked only by THIS API (routes and the authorizer)
 resource "aws_lambda_permission" "api" {
   for_each      = var.functions
   statement_id  = "AllowApiGatewayInvoke"
