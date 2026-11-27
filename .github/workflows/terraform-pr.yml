@@ -30,7 +30,7 @@ jobs:
 
       - uses: hashicorp/setup-terraform@v3
         with:
-             terraform_version: "1.16.6"
+          terraform_version: "1.16.6"
 
       - name: terraform fmt
         run: terraform fmt -check -recursive infra
@@ -49,7 +49,7 @@ jobs:
       - name: tflint
         run: |
           tflint --init
-          for dir in $TF_DIRS; do
+          for dir in $TF_DIRS infra/modules/regional-api; do
             tflint --chdir=$dir
           done
 
@@ -68,9 +68,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The plan zips the Lambda bundle, so build (and test) it first, same as Jenkins
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.22.3"
+
+      - name: Build + test services/hello
+        working-directory: services/hello
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npm test
+          npm run build
+
       - uses: hashicorp/setup-terraform@v3
         with:
-            terraform_version: "1.16.6"
+          terraform_version: "1.16.6"
 
       - name: AWS credentials (read-only OIDC role)
         uses: aws-actions/configure-aws-credentials@v4

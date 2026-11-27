@@ -1,7 +1,7 @@
 // TicketRush deploy pipeline.
 // Runs on throwaway Docker agents using the Jenkins instance role (no keys anywhere).
-//   Any branch: terraform plan (dev)
-//   main only:  plan -> manual approval -> apply the exact saved plan
+//   Any branch: build + test the services, terraform plan (dev)
+//   main only:  plan -> manual approval -> apply the exact saved plan -> smoke-test both regions
 pipeline {
   agent none // each stage picks its own agent, so nothing is held open while waiting for approval
 
@@ -19,14 +19,24 @@ pipeline {
   }
 
   stages {
-    stage('Plan (dev)') {
+    stage('Build + Plan (dev)') {
       agent { label 'docker-agent' }
       steps {
+        dir('services/hello') {
+          sh '''
+            set -eu
+            npm ci --no-audit --no-fund
+            npm run typecheck
+            npm test
+            npm run build
+          '''
+        }
         dir(env.TF_DIR) {
           script { tfInit() }
-          sh 'terraform plan -input=false -lock-timeout=60s -out=tfplan'
+          sh "terraform plan -input=false -lock-timeout=60s -var app_version=${env.GIT_COMMIT.take(7)} -out=tfplan"
         }
-        stash name: 'plan', includes: "${env.TF_DIR}/tfplan"
+        // The apply must use the SAME bundle the plan was made from
+        stash name: 'plan', includes: "${env.TF_DIR}/tfplan,services/hello/dist/**"
       }
     }
 
@@ -39,7 +49,7 @@ pipeline {
       }
     }
 
-    stage('Apply (dev)') {
+    stage('Apply + Smoke test (dev)') {
       when {
         beforeAgent true // check the branch BEFORE starting an agent, so branches don't start one for nothing
         branch 'main'
@@ -50,6 +60,18 @@ pipeline {
         dir(env.TF_DIR) {
           script { tfInit() }
           sh 'terraform apply -input=false -lock-timeout=60s tfplan'
+          // Each region must answer, and must report ITS OWN region
+          sh '''
+            set -eu
+            check() {
+              url=$(terraform output -raw "$1")
+              body=$(curl -fsS --retry 5 --retry-delay 3 --retry-all-errors "$url")
+              echo "$1 -> $body"
+              echo "$body" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const b=JSON.parse(s);if(b.region!==process.argv[1]){console.error("expected region "+process.argv[1]+", got "+b.region);process.exit(1)}})' "$2"
+            }
+            check hello_url_primary us-east-1
+            check hello_url_secondary us-west-2
+          '''
         }
       }
     }
