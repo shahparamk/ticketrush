@@ -6,11 +6,12 @@ FROM ${BASE_IMAGE}
 
 ARG TERRAFORM_VERSION
 ARG AWSCLI_VERSION
+ARG NODE_VERSION
 
 USER root
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl git unzip \
+ && apt-get install -y --no-install-recommends ca-certificates curl git unzip xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
 # Terraform, checksum-verified against HashiCorp's published SHA256SUMS (a tampered download fails the build)
@@ -30,6 +31,18 @@ RUN set -eux; cd /tmp; \
     ./aws/install; \
     rm -rf aws awscliv2.zip; \
     aws --version
+
+# Node.js (for building the Lambda functions), checksum-verified against nodejs.org's SHASUMS256.txt
+RUN set -eux; cd /tmp; \
+    base="https://nodejs.org/dist/v${NODE_VERSION}"; \
+    file="node-v${NODE_VERSION}-linux-x64.tar.xz"; \
+    curl -fsSLO "$base/$file"; \
+    curl -fsSLO "$base/SHASUMS256.txt"; \
+    grep " $file\$" SHASUMS256.txt | sha256sum -c -; \
+    tar -xJf "$file" -C /usr/local --strip-components=1 --no-same-owner; \
+    rm -f "$file" SHASUMS256.txt; \
+    node --version; \
+    npm --version
 
 # Don't let Terraform phone home on every run ("out of date" notices)
 ENV CHECKPOINT_DISABLE=1
