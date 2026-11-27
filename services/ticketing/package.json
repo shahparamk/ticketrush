@@ -1,0 +1,26 @@
+{
+  "name": "@ticketrush/ticketing",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "TicketRush ticketing API: events, seat map, holds",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"src/**/*.test.ts\"",
+    "build": "node scripts/build.mjs",
+    "seed": "node scripts/seed-event.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "3.1168.0",
+    "@aws-sdk/lib-dynamodb": "3.1168.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "8.10.164",
+    "@types/node": "24.19.2",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}
