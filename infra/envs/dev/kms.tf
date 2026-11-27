@@ -16,9 +16,29 @@ data "aws_iam_policy_document" "kms" {
       identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
     }
   }
+
+  # CloudWatch Logs may use this key, but ONLY for ticketrush-dev log groups
+  statement {
+    sid       = "AllowCloudWatchLogsForTicketRushLogGroups"
+    actions   = ["kms:Encrypt*", "kms:Decrypt*", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:Describe*"]
+    resources = ["*"]
+    principals {
+      type        = "Service"
+      identifiers = ["logs.us-east-1.amazonaws.com", "logs.us-west-2.amazonaws.com"]
+    }
+    condition {
+      test     = "ArnLike"
+      variable = "kms:EncryptionContext:aws:logs:arn"
+      values = [
+        "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/ticketrush-dev-*",
+        "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/apigateway/ticketrush-dev-*",
+      ]
+    }
+  }
 }
+
 resource "aws_kms_key" "data" {
-  description             = "${local.name} data encryption (DynamoDB, SQS, S3)"
+  description             = "${local.name} data encryption (DynamoDB, SQS, S3, logs)"
   multi_region            = true
   enable_key_rotation     = true # rotate the key material yearly
   deletion_window_in_days = 7
