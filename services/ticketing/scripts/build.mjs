@@ -1,8 +1,8 @@
 // Bundles each Lambda handler into dist/<name>/index.mjs (one zip per function later).
 import { build } from "esbuild";
 
-// Add new handlers here as they're written (session, authorizer, hold, ...)
-const handlers = ["read"];
+// Add new handlers here as they're written
+const handlers = ["read", "session", "authorizer"];
 
 await build({
   entryPoints: Object.fromEntries(handlers.map((name) => [`${name}/index`, `src/handlers/${name}.ts`])),

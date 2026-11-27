@@ -58,13 +58,15 @@ pipeline {
         dir(env.TF_DIR) {
           script { tfInit() }
           sh 'terraform apply -input=false -lock-timeout=60s tfplan'
-          // Each region must answer, report ITS OWN region, and (for the seat map) show the demo event's 100 seats
           sh '''
             set -eu
+            set +x # don't echo every command: keeps the log readable (and never prints the token)
+
+            # Each region must answer, report ITS OWN region, and (for the seat map) show the demo event's 100 seats
             check() {
               url="$1"; region="$2"; seats="$3"
               body=$(curl -fsS --retry 5 --retry-delay 3 --retry-all-errors "$url")
-              echo "$url -> $(echo "$body" | head -c 300)"
+              echo "$url -> $(echo "$body" | head -c 200)"
               echo "$body" | node -e '
                 let s=""; process.stdin.on("data", d => s += d).on("end", () => {
                   const b = JSON.parse(s), [region, seats] = process.argv.slice(1);
@@ -72,10 +74,31 @@ pipeline {
                   if (seats !== "-" && b.summary?.total !== Number(seats)) { console.error("expected " + seats + " seats, got " + b.summary?.total); process.exit(1); }
                 });' "$region" "$seats"
             }
+
+            # Asserts an HTTP status code
+            expect_status() {
+              want="$1"; shift
+              got=$(curl -s -o /dev/null -w '%{http_code}' "$@")
+              if [ "$got" != "$want" ]; then echo "expected HTTP $want, got $got for: $*"; exit 1; fi
+              echo "HTTP $got as expected for: $(echo "$*" | sed 's/Bearer [^ ]*/Bearer ***/')"
+            }
+
+            p=$(terraform output -raw ticketing_url_primary)
+            s=$(terraform output -raw ticketing_url_secondary)
+
             check "$(terraform output -raw hello_url_primary)"   us-east-1 -
             check "$(terraform output -raw hello_url_secondary)" us-west-2 -
-            check "$(terraform output -raw ticketing_url_primary)/events/demo-boston/seats"   us-east-1 100
-            check "$(terraform output -raw ticketing_url_secondary)/events/demo-boston/seats" us-west-2 100
+            check "$p/events/demo-boston/seats" us-east-1 100
+            check "$s/events/demo-boston/seats" us-west-2 100
+
+            # Buyer tokens: issued in the PRIMARY, accepted in BOTH regions (one multi-Region signing key)
+            token=$(curl -fsS -X POST "$p/session" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const b=JSON.parse(s);if(!b.token)process.exit(1);process.stdout.write(b.token)})')
+            for base in "$p" "$s"; do
+              expect_status 401 "$base/me"                                          # no token: rejected before the authorizer runs
+              expect_status 403 -H "Authorization: Bearer not.a.token" "$base/me"  # bad token: rejected by the authorizer
+              me=$(curl -fsS --retry 3 --retry-delay 2 --retry-all-errors -H "Authorization: Bearer $token" "$base/me")
+              echo "$base/me (token from us-east-1) -> $me"
+            done
           '''
         }
       }
