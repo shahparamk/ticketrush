@@ -1,6 +1,6 @@
 // TicketRush deploy pipeline.
 // Runs on throwaway Docker agents using the Jenkins instance role (no keys anywhere).
-//   Any branch: build + test the services, terraform plan (dev)
+//   Any branch: build + test every service, terraform plan (dev)
 //   main only:  plan -> manual approval -> apply the exact saved plan -> smoke-test both regions
 pipeline {
   agent none // each stage picks its own agent, so nothing is held open while waiting for approval
@@ -22,21 +22,19 @@ pipeline {
     stage('Build + Plan (dev)') {
       agent { label 'docker-agent' }
       steps {
-        dir('services/hello') {
-          sh '''
-            set -eu
-            npm ci --no-audit --no-fund
-            npm run typecheck
-            npm test
-            npm run build
-          '''
-        }
+        sh '''
+          set -eu
+          for svc in services/*/; do
+            echo "=== $svc"
+            (cd "$svc" && npm ci --no-audit --no-fund && npm run typecheck && npm test && npm run build)
+          done
+        '''
         dir(env.TF_DIR) {
           script { tfInit() }
           sh "terraform plan -input=false -lock-timeout=60s -var app_version=${env.GIT_COMMIT.take(7)} -out=tfplan"
         }
-        // The apply must use the SAME bundle the plan was made from
-        stash name: 'plan', includes: "${env.TF_DIR}/tfplan,services/hello/dist/**"
+        // The apply must use the SAME bundles the plan was made from
+        stash name: 'plan', includes: "${env.TF_DIR}/tfplan,services/*/dist/**"
       }
     }
 
@@ -60,17 +58,24 @@ pipeline {
         dir(env.TF_DIR) {
           script { tfInit() }
           sh 'terraform apply -input=false -lock-timeout=60s tfplan'
-          // Each region must answer, and must report ITS OWN region
+          // Each region must answer, report ITS OWN region, and (for the seat map) show the demo event's 100 seats
           sh '''
             set -eu
             check() {
-              url=$(terraform output -raw "$1")
+              url="$1"; region="$2"; seats="$3"
               body=$(curl -fsS --retry 5 --retry-delay 3 --retry-all-errors "$url")
-              echo "$1 -> $body"
-              echo "$body" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const b=JSON.parse(s);if(b.region!==process.argv[1]){console.error("expected region "+process.argv[1]+", got "+b.region);process.exit(1)}})' "$2"
+              echo "$url -> $(echo "$body" | head -c 300)"
+              echo "$body" | node -e '
+                let s=""; process.stdin.on("data", d => s += d).on("end", () => {
+                  const b = JSON.parse(s), [region, seats] = process.argv.slice(1);
+                  if (b.region !== region) { console.error("expected region " + region + ", got " + b.region); process.exit(1); }
+                  if (seats !== "-" && b.summary?.total !== Number(seats)) { console.error("expected " + seats + " seats, got " + b.summary?.total); process.exit(1); }
+                });' "$region" "$seats"
             }
-            check hello_url_primary us-east-1
-            check hello_url_secondary us-west-2
+            check "$(terraform output -raw hello_url_primary)"   us-east-1 -
+            check "$(terraform output -raw hello_url_secondary)" us-west-2 -
+            check "$(terraform output -raw ticketing_url_primary)/events/demo-boston/seats"   us-east-1 100
+            check "$(terraform output -raw ticketing_url_secondary)/events/demo-boston/seats" us-west-2 100
           '''
         }
       }

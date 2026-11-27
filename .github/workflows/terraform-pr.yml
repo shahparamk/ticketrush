@@ -49,7 +49,7 @@ jobs:
       - name: tflint
         run: |
           tflint --init
-          for dir in $TF_DIRS infra/modules/regional-api; do
+          for dir in $TF_DIRS infra/modules/regional-api infra/modules/service-api; do
             tflint --chdir=$dir
           done
 
@@ -68,18 +68,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The plan zips the Lambda bundle, so build (and test) it first, same as Jenkins
+      # The plan zips the Lambda bundles, so build (and test) every service first, same as Jenkins
       - uses: actions/setup-node@v4
         with:
           node-version: "24.22.3"
 
-      - name: Build + test services/hello
-        working-directory: services/hello
+      - name: Build + test every service
         run: |
-          npm ci --no-audit --no-fund
-          npm run typecheck
-          npm test
-          npm run build
+          set -eu
+          for svc in services/*/; do
+            echo "::group::$svc"
+            (cd "$svc" && npm ci --no-audit --no-fund && npm run typecheck && npm test && npm run build)
+            echo "::endgroup::"
+          done
 
       - uses: hashicorp/setup-terraform@v3
         with:

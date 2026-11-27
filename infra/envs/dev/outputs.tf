@@ -17,3 +17,11 @@ output "hello_url_primary" {
 output "hello_url_secondary" {
   value = module.hello_secondary.url
 }
+
+output "ticketing_url_primary" {
+  value = module.ticketing_primary.base_url
+}
+
+output "ticketing_url_secondary" {
+  value = module.ticketing_secondary.base_url
+}
