@@ -40,6 +40,11 @@ variable "awscli_version" {
   type        = string
 }
 
+variable "node_version" {
+  description = "Node.js version inside the build agent (no leading v), matching the Lambda runtime's major version"
+  type        = string
+}
+
 variable "instance_type" {
   description = "Jenkins needs ~2 GB for itself plus room for Docker build agents"
   type        = string

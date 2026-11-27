@@ -38,6 +38,7 @@ resource "aws_instance" "jenkins" {
     agent_base_image  = var.agent_base_image
     terraform_version = var.terraform_version
     awscli_version    = var.awscli_version
+    node_version      = var.node_version
   })
   user_data_replace_on_change = true
 
