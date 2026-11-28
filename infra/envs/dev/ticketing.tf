@@ -2,10 +2,11 @@
 #   read:       event details + seat map (DynamoDB read)
 #   session:    issues buyer tokens (KMS Sign) and serves GET /me
 #   authorizer: verifies buyer tokens (KMS GetPublicKey only)
+#   hold:       holds/releases seats (conditional transactions on seats, buyers, idempotency)
 
 locals {
   ticketing_name = "${local.name}-ticketing"
-  ticketing_fns  = toset(["read", "session", "authorizer"])
+  ticketing_fns  = toset(["read", "session", "authorizer", "hold"])
 
   table_arns = {
     for k, t in aws_dynamodb_table.this : k => "arn:aws:dynamodb:*:${var.account_id}:table/${t.name}"
@@ -13,10 +14,16 @@ locals {
   data_key_arns    = [aws_kms_key.data.arn, aws_kms_replica_key.data.arn]
   signing_key_arns = [aws_kms_key.signing.arn, aws_kms_replica_key.signing.arn]
 
+  hold_routes = [
+    "POST /events/{eventId}/seats/{seatId}/hold",
+    "DELETE /events/{eventId}/seats/{seatId}/hold",
+  ]
+
   ticketing_role_descriptions = {
     read       = "Ticketing read Lambda (both regions): read-only access to events and seats"
     session    = "Ticketing session Lambda (both regions): signs buyer tokens with KMS"
     authorizer = "Ticketing authorizer Lambda (both regions): verifies buyer tokens with the KMS public key"
+    hold       = "Ticketing hold Lambda (both regions): conditional writes to seats, buyers and idempotency"
   }
 }
 
@@ -90,11 +97,33 @@ data "aws_iam_policy_document" "ticketing_verify" {
   }
 }
 
+data "aws_iam_policy_document" "ticketing_hold_access" {
+  # Item-level reads and conditional writes only: no Scan, no DeleteItem, no table changes.
+  # (TransactWriteItems has no IAM action of its own; it needs the per-item actions below.)
+  statement {
+    sid       = "HoldTransactions"
+    actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:ConditionCheckItem"]
+    resources = [local.table_arns["seats"], local.table_arns["buyers"], local.table_arns["idempotency"]]
+  }
+  # Writing to KMS-encrypted tables needs the key, but only through DynamoDB
+  statement {
+    sid       = "UseKeyThroughDynamoDB"
+    actions   = ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
+    resources = local.data_key_arns
+    condition {
+      test     = "StringLike"
+      variable = "kms:ViaService"
+      values   = ["dynamodb.*.amazonaws.com"]
+    }
+  }
+}
+
 locals {
   ticketing_extra_policy = {
     read       = data.aws_iam_policy_document.ticketing_read_access.json
     session    = data.aws_iam_policy_document.ticketing_sign.json
     authorizer = data.aws_iam_policy_document.ticketing_verify.json
+    hold       = data.aws_iam_policy_document.ticketing_hold_access.json
   }
 }
 
@@ -145,7 +174,7 @@ locals {
         environment = {
           EVENTS_TABLE = aws_dynamodb_table.this["events"].name
           SEATS_TABLE  = aws_dynamodb_table.this["seats"].name
-          REGION_ROLE  = region_role # standby will reject writes (step 2c); failover flips it (Phase 6)
+          REGION_ROLE  = region_role
           APP_VERSION  = var.app_version
         }
       }
@@ -177,6 +206,22 @@ locals {
           APP_VERSION    = var.app_version
         }
       }
+      hold = {
+        zip_path             = data.archive_file.ticketing["hold"].output_path
+        zip_hash             = data.archive_file.ticketing["hold"].output_base64sha256
+        role_arn             = aws_iam_role.ticketing["hold"].arn
+        routes               = local.hold_routes
+        memory_size          = 256
+        timeout              = 10
+        reserved_concurrency = 50
+        environment = {
+          SEATS_TABLE       = aws_dynamodb_table.this["seats"].name
+          BUYERS_TABLE      = aws_dynamodb_table.this["buyers"].name
+          IDEMPOTENCY_TABLE = aws_dynamodb_table.this["idempotency"].name
+          REGION_ROLE       = region_role # the standby answers writes with 503 (failover flips this in Phase 6)
+          APP_VERSION       = var.app_version
+        }
+      }
     }
   }
 }
@@ -190,7 +235,7 @@ module "ticketing_primary" {
   kms_key_arn          = aws_kms_key.data.arn
   functions            = local.ticketing_functions["primary"]
   authorizer_function  = "authorizer"
-  protected_routes     = ["GET /me"]
+  protected_routes     = concat(["GET /me"], local.hold_routes)
   throttle_rate_limit  = 50
   throttle_burst_limit = 100
 
@@ -206,7 +251,7 @@ module "ticketing_secondary" {
   kms_key_arn          = aws_kms_replica_key.data.arn
   functions            = local.ticketing_functions["standby"]
   authorizer_function  = "authorizer"
-  protected_routes     = ["GET /me"]
+  protected_routes     = concat(["GET /me"], local.hold_routes)
   throttle_rate_limit  = 50
   throttle_burst_limit = 100
 
