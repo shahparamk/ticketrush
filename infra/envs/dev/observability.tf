@@ -136,7 +136,7 @@ resource "aws_cloudwatch_dashboard" "phase2" {
       {
         type = "metric", x = 8, y = 8, width = 8, height = 6
         properties = {
-          title  = "Concurrency in use (limit 200 each)"
+          title  = "Concurrency in use (limits: hold 300, authorizer 400)"
           region = local.obs_region
           stat   = "Maximum"
           period = 60

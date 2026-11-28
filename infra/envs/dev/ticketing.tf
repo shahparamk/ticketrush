@@ -165,7 +165,9 @@ moved {
   to   = aws_iam_role_policy.ticketing["read"]
 }
 
-# The same functions in both regions; only the region role and keys differ
+# The same functions in both regions; only the region role and keys differ.
+# Reserved concurrency is a CEILING, not a cost (Lambda bills per use). Per region the account has
+# 1,000 and AWS keeps at least 100 unreserved: 10 (hello) + 20 + 20 + 400 + 300 = 750 reserved, 250 free.
 locals {
   ticketing_functions = {
     for region_role in ["primary", "standby"] : region_role => {
@@ -199,13 +201,15 @@ locals {
         }
       }
       authorizer = {
-        zip_path             = data.archive_file.ticketing["authorizer"].output_path
-        zip_hash             = data.archive_file.ticketing["authorizer"].output_base64sha256
-        role_arn             = aws_iam_role.ticketing["authorizer"].arn
-        routes               = []
-        memory_size          = 256
-        timeout              = 5
-        reserved_concurrency = 200 # a rush brings many NEW tokens, and each new token misses the authorizer cache
+        zip_path    = data.archive_file.ticketing["authorizer"].output_path
+        zip_hash    = data.archive_file.ticketing["authorizer"].output_base64sha256
+        role_arn    = aws_iam_role.ticketing["authorizer"].arn
+        routes      = []
+        memory_size = 256
+        timeout     = 5
+        # Measured in rush 2: 2,127 throttles at a ceiling of 200 (every rush buyer brings a NEW token,
+        # so the 60 s cache can't help, and a throttled authorizer caches nothing, so retries re-invoke it)
+        reserved_concurrency = 400
         environment = {
           SIGNING_KEY_ID = aws_kms_alias.signing.name
           REGION_ROLE    = region_role
@@ -213,13 +217,15 @@ locals {
         }
       }
       hold = {
-        zip_path             = data.archive_file.ticketing["hold"].output_path
-        zip_hash             = data.archive_file.ticketing["hold"].output_base64sha256
-        role_arn             = aws_iam_role.ticketing["hold"].arn
-        routes               = local.hold_routes
-        memory_size          = 256
-        timeout              = 10
-        reserved_concurrency = 200 # sized for a 1,000-buyer rush; the hold route's burst below matches it
+        zip_path    = data.archive_file.ticketing["hold"].output_path
+        zip_hash    = data.archive_file.ticketing["hold"].output_base64sha256
+        role_arn    = aws_iam_role.ticketing["hold"].arn
+        routes      = local.hold_routes
+        memory_size = 256
+        timeout     = 10
+        # Measured in rush 2: 1,232 throttles at 200; in-flight requests = rate x duration, and cold
+        # containers take up to ~1 s, so 300/s needs room for ~300 at the start of a rush
+        reserved_concurrency = 300
         environment = {
           SEATS_TABLE       = aws_dynamodb_table.this["seats"].name
           BUYERS_TABLE      = aws_dynamodb_table.this["buyers"].name
@@ -233,8 +239,7 @@ locals {
 }
 
 # Higher limits for the routes a ticket rush hammers; every other route keeps the default (50/s, burst 100).
-# The hold route's BURST matches the hold Lambda's concurrency (200): excess traffic gets a cheap 429 at the
-# edge instead of reaching Lambda and failing with a 503 (measured in the first rush: 2,102 Lambda throttles).
+# The edge throttle turns excess traffic into a cheap 429 before any Lambda runs.
 locals {
   ticketing_route_throttles = {
     "POST /events/{eventId}/seats/{seatId}/hold" = { rate_limit = 300, burst_limit = 200 }
