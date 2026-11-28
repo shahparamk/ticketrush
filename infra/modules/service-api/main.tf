@@ -53,13 +53,22 @@ variable "protected_routes" {
 }
 
 variable "throttle_rate_limit" {
-  description = "Steady-state requests per second allowed for the whole API"
+  description = "Default steady-state requests per second for each route"
   type        = number
 }
 
 variable "throttle_burst_limit" {
-  description = "Short burst of requests allowed above the steady rate"
+  description = "Default short burst of requests allowed above the steady rate"
   type        = number
+}
+
+variable "route_throttles" {
+  description = "Per-route overrides of the default throttle, keyed by route (e.g. the hold route during a rush)"
+  type = map(object({
+    rate_limit  = number
+    burst_limit = number
+  }))
+  default = {}
 }
 
 locals {
@@ -166,6 +175,16 @@ resource "aws_apigatewayv2_stage" "default" {
     throttling_burst_limit = var.throttle_burst_limit
   }
 
+  # Per-route overrides (a route must exist before it can have settings, hence depends_on below)
+  dynamic "route_settings" {
+    for_each = var.route_throttles
+    content {
+      route_key              = route_settings.key
+      throttling_rate_limit  = route_settings.value.rate_limit
+      throttling_burst_limit = route_settings.value.burst_limit
+    }
+  }
+
   access_log_settings {
     destination_arn = aws_cloudwatch_log_group.api.arn
     format = jsonencode({
@@ -178,6 +197,8 @@ resource "aws_apigatewayv2_stage" "default" {
       authError = "$context.authorizer.error"
     })
   }
+
+  depends_on = [aws_apigatewayv2_route.this]
 }
 
 # Each function may be invoked only by THIS API (routes and the authorizer)
