@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test \"src/**/*.test.ts\"",
     "build": "node scripts/build.mjs",
-    "seed": "node scripts/seed-event.ts"
+    "seed": "node scripts/seed-event.ts",
+    "rush": "node scripts/contention-test.ts"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "3.1168.0",
