@@ -10,6 +10,7 @@ class FakeHoldRepo implements HoldRepo {
   seats = new Map<string, SeatItem>();
   buyers = new Map<string, BuyerItem>();
   idem = new Map<string, IdempotencyItem>();
+  failCount = false;
 
   constructor(eventId: string, seatIds: string[]) {
     for (const seatId of seatIds) {
@@ -33,6 +34,12 @@ class FakeHoldRepo implements HoldRepo {
   }
   async getSeat(eventId: string, seatId: string) {
     return this.seats.get(`${eventId}|${seatId}`);
+  }
+  async countAvailable(eventId: string, nowSeconds: number) {
+    if (this.failCount) throw new Error("count failed");
+    return [...this.seats.values()].filter(
+      (s) => s.eventId === eventId && (s.status === "available" || (s.status === "held" && (s.holdExpiresAt ?? 0) <= nowSeconds)),
+    ).length;
   }
 
   async holdSeat(tx: HoldTx): Promise<TxResult> {
@@ -171,6 +178,23 @@ test("only the holder can release; then the seat is available again", async () =
   assert.equal(res.statusCode, 200);
   assert.equal(repo.seats.get("demo|A06")?.status, "available");
   assert.equal(repo.seats.get("demo|A06")?.holderId, undefined);
+});
+
+test("when every seat is gone, the next buyer gets SOLD_OUT (and can stop trying)", async () => {
+  const { call } = setup();
+  for (const [i, s] of SEATS.entries()) await call("POST", s, `fan-${i}`, `fill-key-${i}`);
+  const res = await call("POST", "A03", "late-buyer", "late-key-1");
+  assert.equal(res.statusCode, 409);
+  assert.equal(code(res), "SOLD_OUT");
+});
+
+test("if counting seats fails, the answer falls back to SEAT_TAKEN (never a 500)", async () => {
+  const { repo, call } = setup();
+  for (const [i, s] of SEATS.entries()) await call("POST", s, `fan-${i}`, `fall-key-${i}`);
+  repo.failCount = true;
+  const res = await call("POST", "A03", "late-buyer", "late-key-2");
+  assert.equal(res.statusCode, 409);
+  assert.equal(code(res), "SEAT_TAKEN");
 });
 
 test("unknown seats are 404; bad seat IDs are 400", async () => {

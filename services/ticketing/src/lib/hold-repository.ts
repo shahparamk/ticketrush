@@ -2,6 +2,7 @@ import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
   DynamoDBDocumentClient,
   GetCommand,
+  QueryCommand,
   TransactWriteCommand,
   type TransactWriteCommandInput,
 } from "@aws-sdk/lib-dynamodb";
@@ -52,6 +53,8 @@ export interface HoldRepo {
   getIdempotency(key: string): Promise<IdempotencyItem | undefined>;
   getBuyer(eventId: string, buyerId: string): Promise<BuyerItem | undefined>;
   getSeat(eventId: string, seatId: string): Promise<SeatItem | undefined>;
+  // Seats that can still be held right now: available, or held with an expired hold
+  countAvailable(eventId: string, nowSeconds: number): Promise<number>;
   holdSeat(tx: HoldTx): Promise<TxResult>;
   releaseSeat(tx: ReleaseTx): Promise<TxResult>;
 }
@@ -92,6 +95,28 @@ export class DynamoHoldRepo implements HoldRepo {
       new GetCommand({ TableName: this.tables.seats, Key: { eventId, seatId }, ConsistentRead: true }),
     );
     return res.Item as SeatItem | undefined;
+  }
+
+  // Counts only (Select COUNT): DynamoDB returns a number, not the items
+  async countAvailable(eventId: string, nowSeconds: number): Promise<number> {
+    let count = 0;
+    let start: Record<string, unknown> | undefined;
+    do {
+      const res = await this.doc.send(
+        new QueryCommand({
+          TableName: this.tables.seats,
+          KeyConditionExpression: "eventId = :e",
+          FilterExpression: "#status = :available OR (#status = :held AND holdExpiresAt <= :now)",
+          ExpressionAttributeNames: { "#status": "status" },
+          ExpressionAttributeValues: { ":e": eventId, ":available": "available", ":held": "held", ":now": nowSeconds },
+          Select: "COUNT",
+          ExclusiveStartKey: start,
+        }),
+      );
+      count += res.Count ?? 0;
+      start = res.LastEvaluatedKey;
+    } while (start);
+    return count;
   }
 
   // One all-or-nothing transaction: seat + buyer record + idempotency record

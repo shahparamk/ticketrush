@@ -19,6 +19,7 @@ type HoldEvent = APIGatewayProxyEventV2WithLambdaAuthorizer<BuyerContext>;
 type Result = APIGatewayProxyStructuredResultV2;
 
 const MAX_ATTEMPTS = 6; // retries for buyer-record races and DynamoDB TransactionConflict under contention
+const AVAILABILITY_CACHE_SECONDS = 2; // how long one container trusts its "seats left" count
 
 export interface HoldDeps {
   repo: HoldRepo;
@@ -40,6 +41,9 @@ export function makeHoldHandler(deps: HoldDeps) {
   const maxHolds = deps.maxHolds ?? MAX_HOLDS_PER_BUYER;
   const holdSeconds = deps.holdSeconds ?? HOLD_SECONDS;
   const repo = deps.repo;
+
+  // Per-container cache of "seats left" per event, so a rush doesn't count the seats on every 409
+  const availability = new Map<string, { checkedAt: number; available: number }>();
 
   return async (event: HoldEvent): Promise<Result> => {
     const region = process.env.AWS_REGION ?? "unknown";
@@ -132,8 +136,28 @@ export function makeHoldHandler(deps: HoldDeps) {
     if (seat.holderId === buyerId && effectiveStatus(seat, now()) === "held") {
       return error(409, "ALREADY_HELD_BY_YOU", "You already hold this seat");
     }
+    // Nothing left at all? Tell the buyer to stop trying (saves them, and us, thousands of requests)
+    if ((await seatsLeft(eventId)) === 0) {
+      log({ outcome: "sold_out", eventId, seatId });
+      return error(409, "SOLD_OUT", "Every seat is held or sold. Held seats come back if not bought within 5 minutes.");
+    }
     log({ outcome: "taken", eventId, seatId });
     return error(409, "SEAT_TAKEN", "Sorry, someone else just got this seat");
+  }
+
+  // Cached for a couple of seconds per container; -1 (unknown) if the count fails, so we never fail the request
+  async function seatsLeft(eventId: string): Promise<number> {
+    const t = now();
+    const cached = availability.get(eventId);
+    if (cached && t - cached.checkedAt < AVAILABILITY_CACHE_SECONDS) return cached.available;
+    try {
+      const available = await repo.countAvailable(eventId, t);
+      availability.set(eventId, { checkedAt: t, available });
+      return available;
+    } catch (err) {
+      console.error(JSON.stringify({ msg: "seat count failed", eventId, error: String(err) }));
+      return -1;
+    }
   }
 
   async function release(region: string, buyerId: string, eventId: string, seatId: string): Promise<Result> {
@@ -151,6 +175,7 @@ export function makeHoldHandler(deps: HoldDeps) {
         newHolds: activeHolds(rest, now()),
       });
       if (result.ok) {
+        availability.delete(eventId); // a seat just came back
         log({ outcome: "released", eventId, seatId });
         return json(200, { region, eventId, seatId, released: true });
       }

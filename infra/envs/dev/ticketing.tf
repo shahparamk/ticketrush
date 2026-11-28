@@ -105,6 +105,12 @@ data "aws_iam_policy_document" "ticketing_hold_access" {
     actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:ConditionCheckItem"]
     resources = [local.table_arns["seats"], local.table_arns["buyers"], local.table_arns["idempotency"]]
   }
+  # Counting the seats left (for SOLD_OUT): a Query on the seats table only
+  statement {
+    sid       = "CountSeatsLeft"
+    actions   = ["dynamodb:Query"]
+    resources = [local.table_arns["seats"]]
+  }
   # Writing to KMS-encrypted tables needs the key, but only through DynamoDB
   statement {
     sid       = "UseKeyThroughDynamoDB"
@@ -213,7 +219,7 @@ locals {
         routes               = local.hold_routes
         memory_size          = 256
         timeout              = 10
-        reserved_concurrency = 200 # sized for a 1,000-buyer rush
+        reserved_concurrency = 200 # sized for a 1,000-buyer rush; the hold route's burst below matches it
         environment = {
           SEATS_TABLE       = aws_dynamodb_table.this["seats"].name
           BUYERS_TABLE      = aws_dynamodb_table.this["buyers"].name
@@ -226,10 +232,12 @@ locals {
   }
 }
 
-# Higher limits for the routes a ticket rush hammers; every other route keeps the default (50/s, burst 100)
+# Higher limits for the routes a ticket rush hammers; every other route keeps the default (50/s, burst 100).
+# The hold route's BURST matches the hold Lambda's concurrency (200): excess traffic gets a cheap 429 at the
+# edge instead of reaching Lambda and failing with a 503 (measured in the first rush: 2,102 Lambda throttles).
 locals {
   ticketing_route_throttles = {
-    "POST /events/{eventId}/seats/{seatId}/hold" = { rate_limit = 500, burst_limit = 1000 }
+    "POST /events/{eventId}/seats/{seatId}/hold" = { rate_limit = 300, burst_limit = 200 }
     "POST /session"                              = { rate_limit = 100, burst_limit = 200 }
   }
 }
