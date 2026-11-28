@@ -80,7 +80,7 @@ pipeline {
               want="$1"; shift
               got=$(curl -s -o /dev/null -w '%{http_code}' "$@")
               if [ "$got" != "$want" ]; then echo "expected HTTP $want, got $got for: $*"; exit 1; fi
-              echo "HTTP $got as expected for: $(echo "$*" | sed 's/Bearer [^ ]*/Bearer ***/')"
+              echo "HTTP $got as expected for: $(echo "$*" | sed 's/Bearer [^ ]*/Bearer ***/g')"
             }
 
             p=$(terraform output -raw ticketing_url_primary)
@@ -99,6 +99,26 @@ pipeline {
               me=$(curl -fsS --retry 3 --retry-delay 2 --retry-all-errors -H "Authorization: Bearer $token" "$base/me")
               echo "$base/me (token from us-east-1) -> $me"
             done
+
+            # Holds: hold J10 in the primary, replay with the same key, a second buyer is refused,
+            # the seat shows as held, release it; the standby refuses writes
+            token2=$(curl -fsS -X POST "$p/session" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{process.stdout.write(JSON.parse(s).token)})')
+            key="smoke-$(date +%s)-$$"
+            hold="$p/events/demo-boston/seats/J10/hold"
+
+            expect_status 401 -X POST -H "Idempotency-Key: $key" "$hold"
+            expect_status 201 -X POST -H "Authorization: Bearer $token"  -H "Idempotency-Key: $key" "$hold"
+            replayed=$(curl -s -o /dev/null -D - -X POST -H "Authorization: Bearer $token" -H "Idempotency-Key: $key" "$hold" | tr -d '\\r' | grep -i '^idempotent-replayed: true' || true)
+            if [ -z "$replayed" ]; then echo "expected an idempotent replay"; exit 1; fi
+            echo "same Idempotency-Key replayed the original answer"
+            expect_status 409 -X POST -H "Authorization: Bearer $token2" -H "Idempotency-Key: ${key}-b" "$hold"
+
+            status=$(curl -fsS "$p/events/demo-boston/seats" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{process.stdout.write(JSON.parse(s).seats.find(x=>x.seatId==="J10").status)})')
+            if [ "$status" != "held" ]; then echo "expected J10 held, got $status"; exit 1; fi
+            echo "seat map shows J10 held"
+
+            expect_status 200 -X DELETE -H "Authorization: Bearer $token" "$hold"
+            expect_status 503 -X POST -H "Authorization: Bearer $token" -H "Idempotency-Key: ${key}-s" "$s/events/demo-boston/seats/J10/hold"
           '''
         }
       }

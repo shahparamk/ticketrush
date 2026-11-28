@@ -28,6 +28,13 @@ locals {
       range_key = null
       ttl       = "expiresAt"
     }
+    # One row per buyer per event: their active holds and a version for optimistic locking
+    # (enforces the per-buyer limit even under parallel requests). Rows expire a week later (TTL).
+    buyers = {
+      hash_key  = "eventId"
+      range_key = "buyerId"
+      ttl       = "expiresAt"
+    }
   }
 }
 

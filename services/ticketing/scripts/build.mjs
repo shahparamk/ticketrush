@@ -2,7 +2,7 @@
 import { build } from "esbuild";
 
 // Add new handlers here as they're written
-const handlers = ["read", "session", "authorizer"];
+const handlers = ["read", "session", "authorizer", "hold"];
 
 await build({
   entryPoints: Object.fromEntries(handlers.map((name) => [`${name}/index`, `src/handlers/${name}.ts`])),
