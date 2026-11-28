@@ -199,7 +199,7 @@ locals {
         routes               = []
         memory_size          = 256
         timeout              = 5
-        reserved_concurrency = 50
+        reserved_concurrency = 200 # a rush brings many NEW tokens, and each new token misses the authorizer cache
         environment = {
           SIGNING_KEY_ID = aws_kms_alias.signing.name
           REGION_ROLE    = region_role
@@ -213,7 +213,7 @@ locals {
         routes               = local.hold_routes
         memory_size          = 256
         timeout              = 10
-        reserved_concurrency = 50
+        reserved_concurrency = 200 # sized for a 1,000-buyer rush
         environment = {
           SEATS_TABLE       = aws_dynamodb_table.this["seats"].name
           BUYERS_TABLE      = aws_dynamodb_table.this["buyers"].name
@@ -223,6 +223,14 @@ locals {
         }
       }
     }
+  }
+}
+
+# Higher limits for the routes a ticket rush hammers; every other route keeps the default (50/s, burst 100)
+locals {
+  ticketing_route_throttles = {
+    "POST /events/{eventId}/seats/{seatId}/hold" = { rate_limit = 500, burst_limit = 1000 }
+    "POST /session"                              = { rate_limit = 100, burst_limit = 200 }
   }
 }
 
@@ -238,6 +246,7 @@ module "ticketing_primary" {
   protected_routes     = concat(["GET /me"], local.hold_routes)
   throttle_rate_limit  = 50
   throttle_burst_limit = 100
+  route_throttles      = local.ticketing_route_throttles
 
   depends_on = [aws_iam_role_policy.ticketing]
 }
@@ -254,6 +263,7 @@ module "ticketing_secondary" {
   protected_routes     = concat(["GET /me"], local.hold_routes)
   throttle_rate_limit  = 50
   throttle_burst_limit = 100
+  route_throttles      = local.ticketing_route_throttles
 
   depends_on = [aws_iam_role_policy.ticketing]
 }
