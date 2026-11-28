@@ -129,7 +129,6 @@ data "aws_iam_policy_document" "jenkins_deploy" {
     ]
   }
 
-
   # KMS: only keys tagged Project = ticketrush (the multi-Region data key and its replica)
   statement {
     sid       = "ManageTicketRushKeys"
@@ -146,7 +145,6 @@ data "aws_iam_policy_document" "jenkins_deploy" {
     actions   = ["kms:CreateAlias", "kms:UpdateAlias", "kms:DeleteAlias"]
     resources = ["arn:aws:kms:*:${var.account_id}:alias/ticketrush-*"]
   }
-
   # Creating a key has no existing resource to check a tag on, so require the tag ON THE REQUEST
   # (covers CreateKey and ReplicateKey, which creates the replica key in the other region)
   statement {
@@ -197,6 +195,18 @@ data "aws_iam_policy_document" "jenkins_deploy" {
     sid       = "ApiAccessLogDelivery"
     actions   = ["logs:CreateLogDelivery", "logs:GetLogDelivery", "logs:UpdateLogDelivery", "logs:DeleteLogDelivery", "logs:ListLogDeliveries", "logs:PutResourcePolicy", "logs:DescribeResourcePolicies"]
     resources = ["*"]
+  }
+
+  # CloudWatch dashboards and alarms: only ones named ticketrush-* (reading them is covered by ReadOnlyAccess)
+  statement {
+    sid       = "ManageTicketRushDashboards"
+    actions   = ["cloudwatch:PutDashboard", "cloudwatch:DeleteDashboards"]
+    resources = ["arn:aws:cloudwatch::${var.account_id}:dashboard/ticketrush-*"]
+  }
+  statement {
+    sid       = "ManageTicketRushAlarms"
+    actions   = ["cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms", "cloudwatch:TagResource", "cloudwatch:UntagResource"]
+    resources = ["arn:aws:cloudwatch:*:${var.account_id}:alarm:ticketrush-*"]
   }
 
   # IAM: create and manage ticketrush-dev-* roles ONLY with the permissions boundary attached

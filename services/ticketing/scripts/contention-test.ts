@@ -87,7 +87,18 @@ for (let i = 0; i < BUYERS; i += 50) {
 console.log(`${buyers.length} buyers ready. GO!`);
 
 // 3. The rush: every buyer starts at the same moment
-const stats = { requests: 0, won: 0, taken: 0, alreadyMine: 0, throttled429: 0, busy5xx: 0, network: 0, unexpected: 0, noSeat: 0 };
+const stats = {
+  requests: 0,
+  won: 0,
+  taken: 0,
+  soldOut: 0,
+  alreadyMine: 0,
+  throttled429: 0,
+  busy5xx: 0,
+  network: 0,
+  unexpected: 0,
+  noSeat: 0,
+};
 const latencies: number[] = [];
 const wins: Win[] = [];
 
@@ -113,7 +124,13 @@ async function rush(b: Buyer): Promise<void> {
         return;
       }
       if (r.status === 409) {
-        if (r.body.error?.code === "ALREADY_HELD_BY_YOU") stats.alreadyMine++;
+        const errorCode = r.body.error?.code;
+        if (errorCode === "SOLD_OUT") {
+          stats.soldOut++; // nothing left: stop trying altogether
+          stats.noSeat++;
+          return;
+        }
+        if (errorCode === "ALREADY_HELD_BY_YOU") stats.alreadyMine++;
         else stats.taken++;
         break; // try a different seat
       }
@@ -180,6 +197,7 @@ Buyers ${BUYERS} | seats ${seatIds.length} | rush lasted ${seconds.toFixed(1)} s
 Hold requests: ${stats.requests} (${(stats.requests / seconds).toFixed(0)}/s average)
   201 got a seat ........ ${stats.won}
   409 seat taken ........ ${stats.taken}
+  409 SOLD OUT .......... ${stats.soldOut}  (buyer stopped trying)
   409 already mine ...... ${stats.alreadyMine}
   429 throttled ......... ${stats.throttled429}  (retried with the same Idempotency-Key)
   5xx busy .............. ${stats.busy5xx}  (retried with the same Idempotency-Key)
